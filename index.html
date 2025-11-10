@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>DF No Ponto 2.0 🤙🏾</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body,html,#map{height:100%}
+  #map{width:100%}
+
+  /* PADRONIZAÇÃO DAS LEGENDAS */
+  .line-label {
+    display:inline-block;
+    transform: translate(-50%,-50%);
+    white-space: nowrap;
+    cursor: pointer;
+    font-weight:700;
+    text-align:center;
+    line-height:1.2;
+    padding:2px 4px;
+    border:2px solid #000;
+    font-size:12px;
+    border-radius:6px;
+  }
+
+  .leaflet-popup-content { font-family: Arial, sans-serif; font-size:13px; }
+
+  /* Caixa de pesquisa no lado direito */
+  .search-container {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 99999;
+    width: 300px;
+    font-family: Arial, sans-serif;
+  }
+  @media (min-width:768px){
+    .search-container{ width: 400px; }
+  }
+  #search {
+    width: 100%;
+    height: 50px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    font-size: 20px;
+    outline: 1px solid gray;
+  }
+  .suggestions {
+    background: #fff;
+    border: 1px solid #ccc;
+    border-top: none;
+    max-height: 250px;
+    overflow-y: auto;
+    border-radius: 0 0 4px 4px;
+    display: none;
+  }
+  .suggestion-item { padding: 6px 10px; cursor: pointer; }
+  .suggestion-item:hover { background: #f0f0f0; }
+
+  .search-tags {
+    display:flex;
+    flex-wrap:wrap;
+    margin-top:5px;
+  }
+  .tag {
+    background:#0077b6;
+    color:white;
+    padding:4px 8px;
+    margin:2px;
+    border-radius:4px;
+    font-weight: bold;
+    cursor:pointer;
+    user-select:none;
+  }
+
+  .filtro-container{
+    position:absolute;
+    bottom:30px;
+    right:30px;
+    background:#fff;
+    padding:10px 12px;
+    border-radius:10px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.15);
+    z-index:99999;
+    font-family:Arial, sans-serif;
+    font-size:14px;
+  }
+  .filtro-container label{display:block;margin:4px 0}
+</style>
+</head>
+<body>
+<div class="search-container">
+  <input type="text" id="search" placeholder="Pesquisar linha ou prefixo..." />
+  <div id="suggestions" class="suggestions"></div>
+  <div id="search-tags" class="search-tags"></div>
+</div>
+
+<div id="map"></div>
+
+<div class="filtro-container">
+  <label><input id="todos" type="checkbox" checked> Exibir todos</label>
+  <label><input class="empresa" type="checkbox" value="PIRACICABANA" checked> PIRACICABANA</label>
+  <label><input class="empresa" type="checkbox" value="PIONEIRA" checked> PIONEIRA</label>
+  <label><input class="empresa" type="checkbox" value="URBI" checked> URBI</label>
+  <label><input class="empresa" type="checkbox" value="MARECHAL" checked> MARECHAL</label>
+  <label><input class="empresa" type="checkbox" value="BSBUS" checked> BSBUS</label>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+/* --- configs (mantive seus valores) --- */
+const DATA_URL = "http://localhost:3000/api/geojson";
+const ZOOM_THRESHOLD_FULL = 13;
+const CELL_SIZE_PX = 60;
+const REFRESH_MS = 3000;
+
+const map = L.map('map').setView([-15.8, -47.9], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
+
+const fullMarkers = {};   // id -> marker
+const smallMarkers = {};  // cellKey -> marker
+const idToCell = {};      // id -> cellKey (for small mode)
+let popupInfo = { id: null, marker: null };
+const lastUpdateTimes = {};
+let fullMarkersData = [];
+let searchTerms = [];
+
+const coresEmpresas = {
+  "PIRACICABANA": "#ff1e00",
+  "PIONEIRA": "#ffd500",
+  "URBI": "#0080ff",
+  "MARECHAL": "#ff9100",
+  "BSBUS": "#4dff00"
+};
+
+function empresaPorPrefixo(numero){
+  const s = String(numero||'');
+  switch(s.charAt(0)){
+    case '1': return 'PIRACICABANA';
+    case '2': return 'PIONEIRA';
+    case '3': return 'URBI';
+    case '4': return 'MARECHAL';
+    case '5': case '7': return 'BSBUS';
+    default: return 'DESCONHECIDO';
+  }
+}
+
+function formatarTempo(segundos){
+  const dias = Math.floor(segundos/86400);
+  const horas = Math.floor((segundos%86400)/3600);
+  const minutos = Math.floor((segundos%3600)/60);
+  const seg = segundos%60;
+  if(dias>0) return `${dias}d ${horas}h ${minutos}m ${seg}s`;
+  if(horas>0) return `${horas}h ${minutos}m ${seg}s`;
+  if(minutos>0) return `${minutos}m ${seg}s`;
+  return `${seg}s`;
+}
+
+/* Mantive exatamente sua estrutura de popup (só que sem destruir quando atualiza) */
+function criarConteudoPopup(prefixo, cd_linha, empresa, id){
+  const tempo = lastUpdateTimes[id] ? formatarTempo(Math.floor((Date.now()-lastUpdateTimes[id])/1000)) : 'calculando...';
+  return `<b>Linha:</b> ${cd_linha || 'Sem Operação ou <br>Transferência'}<br>
+          <hr>
+          <b>Prefixo:</b> ${prefixo}<br>
+          <b>Empresa:</b> ${empresa}<br>
+          <b>Último sinal:</b> ${tempo} atrás`;
+}
+
+/* bind com comportamento padrão: abre popup, ao abrir outro fecha anterior (padrão do leaflet) */
+function bindAndOpenMarker(marker, id, prefixo, cd_linha, empresa){
+  const content = criarConteudoPopup(prefixo, cd_linha, empresa, id);
+  try { marker.unbindPopup(); } catch(e){}
+  // bind com comportamento default (sem forçar autoClose:false)
+  marker.bindPopup(content).openPopup();
+  // se já havia outro popup aberto, deixe o leaflet fechar ele automaticamente
+  popupInfo = { id, marker };
+}
+
+/* helper para calcular cellKey (mantido) */
+function getCellKey(latlng){
+  const p = map.project(latlng, map.getZoom());
+  const cellX = Math.floor(p.x / CELL_SIZE_PX);
+  const cellY = Math.floor(p.y / CELL_SIZE_PX);
+  return `${cellX}_${cellY}`;
+}
+
+/* === atualização de marcadores: evitar destruir tudo === */
+async function atualizarMapa(){
+  try{
+    const resp = await fetch(DATA_URL);
+    if(!resp.ok) throw new Error('fetch error');
+    const data = await resp.json();
+    const features = data.features || [];
+    fullMarkersData = features; // para sugestões
+    const zoom = map.getZoom();
+    const fullMode = zoom >= ZOOM_THRESHOLD_FULL;
+    const activeEmpresas = Array.from(document.querySelectorAll('.empresa:checked')).map(el=>el.value);
+
+    // filtra conforme empresas e termos de busca
+    const filtered = features.filter(f=>{
+      const p = f.properties;
+      const prefixo = String(p.prefixo || '');
+      const linha = String(p.cd_linha || '');
+      const empresa = empresaPorPrefixo(prefixo);
+      if(!activeEmpresas.includes(empresa)) return false;
+      if(searchTerms.length === 0) return true;
+      return searchTerms.some(term => (linha && linha.includes(term)) || (prefixo && prefixo.includes(term)));
+    });
+
+    if(fullMode){
+      // vamos manter um set dos ids vistos nesta atualização
+      const seen = new Set();
+
+      for(const f of filtered){
+        const p = f.properties;
+        const prefixo = String(p.prefixo);
+        const id = String(prefixo);
+        const cd_linha = p.cd_linha;
+        const empresa = empresaPorPrefixo(prefixo);
+        const lat = parseFloat(p.latitude);
+        const lon = parseFloat(p.longitude);
+        if(!lat || !lon || lat===0 || lon===0) continue;
+
+        // armazenar tempo em ms (consistente)
+        lastUpdateTimes[id] = p.datalocal ? new Date(p.datalocal).getTime() : (lastUpdateTimes[id] || Date.now());
+
+        seen.add(id);
+        const color = coresEmpresas[empresa] || '#0077b6';
+        const html = `<div class="line-label" style="background:${color}">${cd_linha||'—'}</div>`;
+
+        // se o marker já existe, apenas atualize posição e html
+        if(fullMarkers[id]){
+          fullMarkers[id].setLatLng([lat, lon]);
+          // atualiza HTML do divIcon se necessário
+          const el = fullMarkers[id].getElement();
+          if(el && el.innerHTML !== html){
+            // atualizar ícone recriando icon — manter referência marker
+            const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-10] });
+            fullMarkers[id].setIcon(icon);
+          }
+          // se o popup atual aberto é deste id, atualiza conteúdo para manter "Último sinal"
+          if(popupInfo.id === id && popupInfo.marker){
+            const popup = fullMarkers[id].getPopup();
+            if(popup && popup.isOpen()){
+              const content = criarConteudoPopup(prefixo, cd_linha, empresa, id);
+              popup.setContent(content);
+            }
+            // garantir popup segue o marker (se por algum motivo o popup estava ligado ao marker antigo)
+            try { fullMarkers[id].openPopup(); } catch(e){}
+            popupInfo.marker = fullMarkers[id];
+          }
+        } else {
+          // criar novo marker
+          const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-10] });
+          const m = L.marker([lat, lon], { icon }).addTo(map);
+          m.on('click', function(evt){
+            bindAndOpenMarker(m, id, prefixo, cd_linha, empresa);
+          });
+          fullMarkers[id] = m;
+
+          // se popup estava aberto para esse id (caso raro), reabri-lo no novo marker
+          if(popupInfo.id === id){
+            // abrir com conteúdo atualizado
+            const content = criarConteudoPopup(prefixo, cd_linha, empresa, id);
+            try { m.unbindPopup(); } catch(e){}
+            m.bindPopup(content).openPopup();
+            popupInfo.marker = m;
+          }
+        }
+      }
+
+      // remover fullMarkers que não foram vistos agora
+      for(const id in fullMarkers){
+        if(!seen.has(id)){
+          // se popup estava no marker que vamos remover, feche e limpe popupInfo
+          if(popupInfo.id === id && popupInfo.marker){
+            try { popupInfo.marker.closePopup(); } catch(e){}
+            popupInfo = { id: null, marker: null };
+          }
+          map.removeLayer(fullMarkers[id]);
+          delete fullMarkers[id];
+        }
+      }
+
+      // no modo full não mantemos smallMarkers; remova-os
+      for(const k in smallMarkers){ map.removeLayer(smallMarkers[k]); delete smallMarkers[k]; }
+      for(const k in idToCell){ delete idToCell[k]; }
+
+    } else {
+      // modo small: agregação por célula
+      const cellMap = {}; // cellKey -> representative
+      const idCellMap = {}; // id -> cellKey
+
+      for(const f of filtered){
+        const p = f.properties;
+        const prefixo = String(p.prefixo);
+        const id = String(prefixo);
+        const cd_linha = p.cd_linha;
+        const empresa = empresaPorPrefixo(prefixo);
+        const lat = parseFloat(p.latitude);
+        const lon = parseFloat(p.longitude);
+        if(!lat || !lon || lat===0 || lon===0) continue;
+
+        lastUpdateTimes[id] = p.datalocal ? new Date(p.datalocal).getTime() : (lastUpdateTimes[id] || Date.now());
+
+        const latlng = L.latLng(lat, lon);
+        const cellKey = getCellKey(latlng);
+        idCellMap[id] = cellKey;
+
+        if(!cellMap[cellKey]){
+          cellMap[cellKey] = { id, latlng, cd_linha, empresa, color: coresEmpresas[empresa] || '#0077b6', prefixo };
+        }
+      }
+
+      // sincronizar idToCell (para limpeza)
+      for(const id in idToCell){ if(!(id in idCellMap)) delete idToCell[id]; }
+      for(const id in idCellMap) idToCell[id] = idCellMap[id];
+
+      // atualizar/criar smallMarkers pelas células
+      const seenCells = new Set();
+      for(const cellKey in cellMap){
+        seenCells.add(cellKey);
+        const rep = cellMap[cellKey];
+        const html = `<div class="line-label" style="background:${rep.color}">${rep.cd_linha||'—'}</div>`;
+
+        if(smallMarkers[cellKey]){
+          smallMarkers[cellKey].setLatLng(rep.latlng);
+          const el = smallMarkers[cellKey].getElement();
+          if(el && el.innerHTML !== html){
+            const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-8] });
+            smallMarkers[cellKey].setIcon(icon);
+          }
+          // transfer popup if needed
+          if(popupInfo.id === rep.id && popupInfo.marker){
+            const popup = smallMarkers[cellKey].getPopup();
+            if(popup && popup.isOpen()){
+              const content = criarConteudoPopup(rep.prefixo, rep.cd_linha, rep.empresa, rep.id);
+              popup.setContent(content);
+            }
+            try { smallMarkers[cellKey].openPopup(); } catch(e){}
+            popupInfo.marker = smallMarkers[cellKey];
+          }
+        } else {
+          const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-8] });
+          const m = L.marker(rep.latlng, { icon, interactive:true }).addTo(map);
+          m.on('click', ()=> bindAndOpenMarker(m, rep.id, rep.prefixo, rep.cd_linha, rep.empresa));
+          smallMarkers[cellKey] = m;
+
+          if(popupInfo.id === rep.id){
+            const content = criarConteudoPopup(rep.prefixo, rep.cd_linha, rep.empresa, rep.id);
+            try { m.unbindPopup(); } catch(e){}
+            m.bindPopup(content).openPopup();
+            popupInfo.marker = m;
+          }
+        }
+      }
+
+      // remover smallMarkers que não existem mais
+      for(const key in smallMarkers){
+        if(!seenCells.has(key)){
+          // if popup was on it, close
+          const marker = smallMarkers[key];
+          if(popupInfo.marker === marker){
+            try { marker.closePopup(); } catch(e){}
+            popupInfo = { id: null, marker: null };
+          }
+          map.removeLayer(marker);
+          delete smallMarkers[key];
+        }
+      }
+
+      // remove fullMarkers if any (we're in small mode)
+      for(const id in fullMarkers){
+        if(fullMarkers[id]){
+          map.removeLayer(fullMarkers[id]);
+          delete fullMarkers[id];
+        }
+      }
+    }
+
+  } catch(err){
+    console.error('Erro atualizarMapa', err);
+  }
+}
+
+/* Atualiza o texto "Último sinal" do popup aberto sem fechar o popup */
+/* Usa popupInfo e o popup que está ligado ao marker atual */
+setInterval(()=>{
+  if(popupInfo.id && popupInfo.marker && lastUpdateTimes[popupInfo.id]){
+    const popup = popupInfo.marker.getPopup();
+    if(popup && popup.isOpen()){
+      const segundos = Math.floor((Date.now()-lastUpdateTimes[popupInfo.id])/1000);
+      const tempo = formatarTempo(segundos);
+      const content = criarConteudoPopup(popupInfo.id, '', /* placeholder linha não usada aqui */ '', popupInfo.id);
+      // reconstruir conteúdo completo (mantendo seu formato original)
+      // Para garantir que linha/empresa fiquem corretos, tentamos encontrar dados no fullMarkersData
+      let prefixo = popupInfo.id;
+      let cd_linha = '—';
+      let empresa = '—';
+      for(const f of fullMarkersData){
+        const p = f.properties;
+        if(String(p.prefixo) === popupInfo.id){
+          prefixo = p.prefixo;
+          cd_linha = p.cd_linha || 'Sem Operação ou <br>Transferência';
+          empresa = empresaPorPrefixo(prefixo);
+          break;
+        }
+      }
+      const newContent = `<b>Linha:</b> ${cd_linha}<br>
+          <hr>
+          <b>Prefixo:</b> ${prefixo}<br>
+          <b>Empresa:</b> ${empresa}<br>
+          <b>Último sinal:</b> ${tempo} atrás`;
+      popup.setContent(newContent);
+    }
+  }
+},1000);
+
+/* Manter comportamento esperado ao fechar popup: limpar referência */
+map.on('popupclose', function(e){
+  // se popup fechado manualmente, limpar popupInfo se for o mesmo
+  if(popupInfo.marker && e.popup === popupInfo.marker.getPopup()){
+    popupInfo = { id: null, marker: null };
+  }
+});
+
+/* Ao clicar no mapa, deixar o popup fechar (comportamento padrão) */
+/* Não precisamos adicionar handler — Leaflet fecha popups ao clicar no mapa por padrão. */
+/* Porém se você tiver custom handlers antes, assegure-se que não impeçam o closeOnClick padrão. */
+
+/* --- filtros e pesquisa (mantidos iguais ao seu código) --- */
+
+document.querySelectorAll('.empresa').forEach(chk=>chk.addEventListener('change', atualizarMapa));
+document.getElementById('todos').addEventListener('change', e=>{
+  const val = e.target.checked;
+  document.querySelectorAll('.empresa').forEach(c=>c.checked = val);
+  atualizarMapa();
+});
+
+const searchInput = document.getElementById('search');
+const suggestionsBox = document.getElementById('suggestions');
+const tagsContainer = document.getElementById('search-tags');
+
+function getSearchOptions(features){
+  const set = new Set();
+  features.forEach(f => {
+    const p=f.properties;
+    if(p.cd_linha) set.add(String(p.cd_linha));
+    if(p.prefixo) set.add(String(p.prefixo));
+  });
+  return Array.from(set);
+}
+
+function atualizarTagsUI(){
+  tagsContainer.innerHTML = '';
+  searchTerms.forEach(term=>{
+    const div = document.createElement('div');
+    div.className = 'tag';
+    div.innerText = term + ' ×';
+    div.dataset.term = term;
+    tagsContainer.appendChild(div);
+  });
+}
+
+tagsContainer.addEventListener('click', e=>{
+  if(e.target.classList.contains('tag')){
+    const term = e.target.dataset.term;
+    searchTerms = searchTerms.filter(t=>t!==term);
+    atualizarTagsUI();
+    atualizarMapa();
+  }
+});
+
+searchInput.addEventListener('input', ()=>{
+  const val = searchInput.value.trim();
+  if(!val){ suggestionsBox.style.display='none'; return; }
+  const options = getSearchOptions(fullMarkersData).filter(x=>x.includes(val));
+  suggestionsBox.innerHTML = options.map(x=>`<div class="suggestion-item">${x}</div>`).join('');
+  suggestionsBox.style.display = options.length? 'block':'none';
+});
+
+suggestionsBox.addEventListener('click', e=>{
+  if(e.target.classList.contains('suggestion-item')){
+    const val = e.target.innerText;
+    if(!searchTerms.includes(val)) searchTerms.push(val);
+    searchInput.value = '';
+    suggestionsBox.style.display = 'none';
+    atualizarTagsUI();
+    atualizarMapa();
+  }
+});
+
+map.on('zoomend', atualizarMapa);
+map.on('moveend', atualizarMapa);
+
+/* bootstrap */
+atualizarMapa();
+setInterval(atualizarMapa, REFRESH_MS);
+</script>
+</body>
+</html>
