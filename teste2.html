@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Linha Leaflet</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    #map {
+      height: 100vh;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    // Coordenadas da linha (seu trajeto)
+    const coords = ;
+
+    // Inicializa o mapa
+    const map = L.map('map');
+
+    // Adiciona o mapa base
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    // Linha preta (borda)
+    const borda = L.polyline(coords, {
+      color: 'black',
+      weight: 4,
+      opacity: 1
+    }).addTo(map);
+
+    // Cria a linha
+    const linha = L.polyline(coords, {
+      color: '#0080ff',
+      weight: 3,
+      opacity: 1
+    }).addTo(map);
+
+    // Ajusta o zoom automaticamente para o tamanho da linha
+    map.fitBounds(linha.getBounds());
+  </script>
+</body>
+</html>

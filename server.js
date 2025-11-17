@@ -18,4 +18,4 @@ app.get("/api/geojson", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("Proxy rodando em http://localhost:3000"));
+app.listen(3000, () => console.log("Proxy rodando em http://localhost:3000/api/geojson"));

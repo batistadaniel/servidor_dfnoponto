@@ -111,6 +111,56 @@
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
+
+let linhaAtivaBorda = null;
+let linhaAtivaCor = null;
+let dadosTracado = null;
+
+async function carregarTracado() {
+  const resp = await fetch("json/tracado_linha.json");
+  dadosTracado = await resp.json();
+}
+
+carregarTracado();
+
+function desenharTracado(cd_linha, empresa) {
+  if (!dadosTracado) return;
+
+  // limpar traçado anterior
+  if (linhaAtivaBorda) map.removeLayer(linhaAtivaBorda);
+  if (linhaAtivaCor) map.removeLayer(linhaAtivaCor);
+
+  const item = dadosTracado.find(x => String(x.cd_linha) === String(cd_linha));
+
+  if (!item) return;
+
+  let coords;
+  try {
+    coords = JSON.parse(item.tracado_linha);
+  } catch (e) {
+    console.error("Erro ao converter tracado_linha:", e);
+    return;
+  }
+
+  const corEmpresa = coresEmpresas[empresa] || "#0080ff";
+
+  linhaAtivaBorda = L.polyline(coords, {
+    color: "black",
+    weight: 5,
+    opacity: 1
+  }).addTo(map);
+
+  linhaAtivaCor = L.polyline(coords, {
+    color: corEmpresa,
+    weight: 3,
+    opacity: 1
+  }).addTo(map);
+
+  map.fitBounds(linhaAtivaCor.getBounds());
+}
+
+
+
 /* --- configs (mantive seus valores) --- */
 const DATA_URL = "http://localhost:3000/api/geojson";
 const ZOOM_THRESHOLD_FULL = 13;
@@ -182,24 +232,33 @@ function formatarDataHora(datalocal) {
 }
 
 
+
 /* Mantive exatamente sua estrutura de popup (só que sem destruir quando atualiza) */
 function criarConteudoPopup(prefixo, cd_linha, empresa, id){
   const tempo = lastUpdateTimes[id] ? formatarTempo(Math.floor((Date.now()-lastUpdateTimes[id])/1000)) : 'calculando...';
 
   // pegar datalocal original do feature
   let datalocalOriginal = null;
+  let sentidoOriginal = null;
   for (const f of fullMarkersData) {
     if (String(f.properties.prefixo) === String(id)) {
       datalocalOriginal = f.properties.datalocal;
+      sentidoOriginal = f.properties.sentido;
       break;
     }
   }
 
   const { data, hora } = formatarDataHora(datalocalOriginal);
 
+    // converter sentido
+  let sentidoTxt = "—";
+  if (sentidoOriginal === "0") sentidoTxt = "Ida";
+  else if (sentidoOriginal === "1") sentidoTxt = "Volta";
+
   return `
     <b>Linha:</b> ${cd_linha || 'Sem Operação ou <br>Transferência'}<br>
-    <hr>
+    <hr><br>
+    <b>Sentido:</b> ${sentidoTxt}<br>
     <b>Prefixo:</b> ${prefixo}<br>
     <b>Empresa:</b> ${empresa}<br>
     <b>Data:</b> ${data}<br>
@@ -298,6 +357,7 @@ async function atualizarMapa(){
           const m = L.marker([lat, lon], { icon }).addTo(map);
           m.on('click', function(evt){
             bindAndOpenMarker(m, id, prefixo, cd_linha, empresa);
+            desenharTracado(cd_linha, empresa);
           });
           fullMarkers[id] = m;
 
@@ -386,7 +446,7 @@ async function atualizarMapa(){
         } else {
           const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-8] });
           const m = L.marker(rep.latlng, { icon, interactive:true }).addTo(map);
-          m.on('click', ()=> bindAndOpenMarker(m, rep.id, rep.prefixo, rep.cd_linha, rep.empresa));
+          m.on('click', ()=> {bindAndOpenMarker(m, rep.id, rep.prefixo, rep.cd_linha, rep.empresa);desenharTracado(cd_linha, empresa);});
           smallMarkers[cellKey] = m;
 
           if(popupInfo.id === rep.id){
