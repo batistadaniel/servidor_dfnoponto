@@ -159,15 +159,55 @@ function formatarTempo(segundos){
   return `${seg}s`;
 }
 
+function formatarDataHora(datalocal) {
+  if (!datalocal) return { data: "—", hora: "—" };
+
+  const d = new Date(datalocal);
+
+  // Formatar data dd/mm/aaaa
+  const dia = String(d.getDate()).padStart(2, "0");
+  const mes = String(d.getMonth() + 1).padStart(2, "0");
+  const ano = d.getFullYear();
+
+  const data = `${dia}/${mes}/${ano}`;
+
+  // Formatar hora hh:mm:ss
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+
+  const hora = `${hh}:${mm}:${ss}`;
+
+  return { data, hora };
+}
+
+
 /* Mantive exatamente sua estrutura de popup (só que sem destruir quando atualiza) */
 function criarConteudoPopup(prefixo, cd_linha, empresa, id){
   const tempo = lastUpdateTimes[id] ? formatarTempo(Math.floor((Date.now()-lastUpdateTimes[id])/1000)) : 'calculando...';
-  return `<b>Linha:</b> ${cd_linha || 'Sem Operação ou <br>Transferência'}<br>
-          <hr>
-          <b>Prefixo:</b> ${prefixo}<br>
-          <b>Empresa:</b> ${empresa}<br>
-          <b>Último sinal:</b> ${tempo} atrás`;
+
+  // pegar datalocal original do feature
+  let datalocalOriginal = null;
+  for (const f of fullMarkersData) {
+    if (String(f.properties.prefixo) === String(id)) {
+      datalocalOriginal = f.properties.datalocal;
+      break;
+    }
+  }
+
+  const { data, hora } = formatarDataHora(datalocalOriginal);
+
+  return `
+    <b>Linha:</b> ${cd_linha || 'Sem Operação ou <br>Transferência'}<br>
+    <hr>
+    <b>Prefixo:</b> ${prefixo}<br>
+    <b>Empresa:</b> ${empresa}<br>
+    <b>Data:</b> ${data}<br>
+    <b>Horário:</b> ${hora}<br>
+    <b>Último sinal:</b> ${tempo} atrás
+  `;
 }
+
 
 /* bind com comportamento padrão: abre popup, ao abrir outro fecha anterior (padrão do leaflet) */
 function bindAndOpenMarker(marker, id, prefixo, cd_linha, empresa){
@@ -413,6 +453,8 @@ setInterval(()=>{
           <hr>
           <b>Prefixo:</b> ${prefixo}<br>
           <b>Empresa:</b> ${empresa}<br>
+          <b>Data:</b> ${data}<br>
+          <b>Horário:</b> ${hora}<br>
           <b>Último sinal:</b> ${tempo} atrás`;
       popup.setContent(newContent);
     }
