@@ -20,7 +20,7 @@
     text-align:center;
     line-height:1.2;
     padding:2px 4px;
-    border:2px solid #000;
+    border:2.5px solid #000;
     font-size:12px;
     border-radius:6px;
   }
@@ -79,7 +79,7 @@
   .filtro-container{
     position:absolute;
     bottom:30px;
-    right:30px;
+    right:12px;
     background:#fff;
     padding:10px 12px;
     border-radius:10px;
@@ -89,6 +89,17 @@
     font-size:14px;
   }
   .filtro-container label{display:block;margin:4px 0}
+</style>
+<style>
+  .hover-tooltip {
+    background: rgba(255,255,255,0.95);
+    color: #000;
+    border: 1px solid rgba(0,0,0,0.2);
+    padding: 4px 8px;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    font-weight: 700;
+  }
 </style>
 </head>
 <body>
@@ -123,16 +134,36 @@ async function carregarTracado() {
 
 carregarTracado();
 
-function desenharTracado(cd_linha, empresa) {
+function desenharTracado(cd_linha, empresa, sentidoApi){
   if (!dadosTracado) return;
 
   // limpar traçado anterior
-  if (linhaAtivaBorda) map.removeLayer(linhaAtivaBorda);
-  if (linhaAtivaCor) map.removeLayer(linhaAtivaCor);
+  if (linhaAtivaBorda) { map.removeLayer(linhaAtivaBorda); linhaAtivaBorda = null; }
+  if (linhaAtivaCor) { map.removeLayer(linhaAtivaCor); linhaAtivaCor = null; }
 
-  const item = dadosTracado.find(x => String(x.cd_linha) === String(cd_linha));
+  if(!cd_linha) return;
 
-  if (!item) return;
+  // filtra todos os registros do json para a linha
+  const candidatos = dadosTracado.filter(x => String(x.cd_linha) === String(cd_linha));
+  if(!candidatos || candidatos.length === 0) return;
+
+  // função auxiliar para mapear sentidoApi ('0' => 'IDA','1' => 'VOLTA')
+  function mapSentidoApi(s){ if(s === '0') return 'IDA'; if(s === '1') return 'VOLTA'; return null; }
+  const sentidoMapeado = mapSentidoApi(String(sentidoApi));
+
+  // priorizar correspondência exata por sentido_linha
+  let item = null;
+  if(sentidoMapeado){
+    item = candidatos.find(c => String(c.sentido_linha).toUpperCase() === sentidoMapeado);
+  }
+  // se não achou, tentar pegar CIRCULAR (se existir)
+  if(!item){
+    item = candidatos.find(c => String(c.sentido_linha).toUpperCase() === 'CIRCULAR');
+  }
+  // fallback para qualquer registro da linha
+  if(!item) item = candidatos[0];
+
+  if(!item) return;
 
   let coords;
   try {
@@ -156,7 +187,96 @@ function desenharTracado(cd_linha, empresa) {
     opacity: 1
   }).addTo(map);
 
-  map.fitBounds(linhaAtivaCor.getBounds());
+  // permitir fechar o tracado clicando sobre ele
+  try{
+    linhaAtivaBorda.on('click', function(){
+      selectedLinha = null;
+      aplicarFiltroPorLinha(null);
+      limparTracado();
+    });
+  }catch(e){}
+  try{
+    linhaAtivaCor.on('click', function(){
+      selectedLinha = null;
+      aplicarFiltroPorLinha(null);
+      limparTracado();
+    });
+  }catch(e){}
+
+  // tornar as polylines interativas para permitir fechar clicando nelas
+  try{
+    linhaAtivaBorda.on('click', function(e){
+      selectedLinha = null;
+      aplicarFiltroPorLinha(null);
+      limparTracado();
+    });
+  }catch(e){}
+  try{
+    linhaAtivaCor.on('click', function(e){
+      selectedLinha = null;
+      aplicarFiltroPorLinha(null);
+      limparTracado();
+    });
+  }catch(e){}
+
+  // expandir mapa para bounds do traçado
+  try{ map.fitBounds(linhaAtivaCor.getBounds()); }catch(e){}
+}
+
+// seleção por número de linha (adicionado)
+let selectedLinha = null; // cd_linha selecionada (string) ou null
+
+function limparTracado(){
+  if (linhaAtivaBorda) { map.removeLayer(linhaAtivaBorda); linhaAtivaBorda = null; }
+  if (linhaAtivaCor) { map.removeLayer(linhaAtivaCor); linhaAtivaCor = null; }
+}
+
+function aplicarFiltroPorLinha(cd_linha){
+  // Se cd_linha for null -> restaura todos (addTo map)
+  // Caso contrário, mostra apenas markers cuja propriedade _cd_linha === cd_linha
+  for(const id in fullMarkers){
+    const m = fullMarkers[id];
+    if(!m) continue;
+    try{
+      if(!cd_linha || String(m._cd_linha) === String(cd_linha)){
+        if(!map.hasLayer(m)) m.addTo(map);
+      } else {
+        if(map.hasLayer(m)) map.removeLayer(m);
+      }
+    }catch(e){ /* ignore */ }
+  }
+  for(const key in smallMarkers){
+    const m = smallMarkers[key];
+    if(!m) continue;
+    try{
+      if(!cd_linha || String(m._cd_linha) === String(cd_linha)){
+        if(!map.hasLayer(m)) m.addTo(map);
+      } else {
+        if(map.hasLayer(m)) map.removeLayer(m);
+      }
+    }catch(e){ /* ignore */ }
+  }
+}
+
+function selecionarLinha(cd_linha, empresa, sentido){
+  // togglear seleção: se clicar na mesma linha, limpa seleção
+  if(!cd_linha){
+    selectedLinha = null;
+    aplicarFiltroPorLinha(null);
+    limparTracado();
+    return;
+  }
+  if(selectedLinha && String(selectedLinha) === String(cd_linha)){
+    // já selecionada -> limpar
+    selectedLinha = null;
+    aplicarFiltroPorLinha(null);
+    limparTracado();
+  } else {
+    selectedLinha = String(cd_linha);
+    aplicarFiltroPorLinha(selectedLinha);
+    // desenhar tracado usando a empresa do clique para colorir
+    desenharTracado(cd_linha, empresa, sentido);
+  }
 }
 
 
@@ -169,6 +289,22 @@ const REFRESH_MS = 3000;
 
 const map = L.map('map').setView([-15.8, -47.9], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(map);
+
+// clicar no mapa (fora) limpa seleção/tracado e restaura marcadores
+map.on('click', function(){
+  selectedLinha = null;
+  aplicarFiltroPorLinha(null);
+  limparTracado();
+});
+
+// atalho ESC para limpar seleção/tracado
+document.addEventListener('keydown', function(e){
+  if(e.key === 'Escape'){
+    selectedLinha = null;
+    aplicarFiltroPorLinha(null);
+    limparTracado();
+  }
+});
 
 const fullMarkers = {};   // id -> marker
 const smallMarkers = {};  // cellKey -> marker
@@ -239,26 +375,59 @@ function criarConteudoPopup(prefixo, cd_linha, empresa, id){
 
   // pegar datalocal original do feature
   let datalocalOriginal = null;
-  let sentidoOriginal = null;
+  let sentidoOriginal = null; // valor vindo da API: '0','1' ou ''
   for (const f of fullMarkersData) {
     if (String(f.properties.prefixo) === String(id)) {
       datalocalOriginal = f.properties.datalocal;
-      sentidoOriginal = f.properties.sentido;
+      sentidoOriginal = (f.properties.sentido !== undefined && f.properties.sentido !== null) ? String(f.properties.sentido) : '';
       break;
     }
   }
 
   const { data, hora } = formatarDataHora(datalocalOriginal);
 
-    // converter sentido
-  let sentidoTxt = "—";
-  if (sentidoOriginal === "0") sentidoTxt = "Ida";
-  else if (sentidoOriginal === "1") sentidoTxt = "Volta";
+  // determinar texto de sentido consultando o JSON de traçados
+  let sentidoTxt = '—';
+  // primeiro, mapear valor da API para texto
+  if (sentidoOriginal === '0') sentidoTxt = 'Ida';
+  else if (sentidoOriginal === '1') sentidoTxt = 'Volta';
+
+  if (cd_linha && dadosTracado){
+    // procurar entradas do json para esta linha
+    const candidatos = dadosTracado.filter(x => String(x.cd_linha) === String(cd_linha));
+    if(candidatos && candidatos.length){
+      // tentar achar registro com sentido_linha IDA/VOLTA conforme API
+      const matchApi = candidatos.find(c => {
+        const s = String(c.sentido_linha||'').toUpperCase();
+        if(sentidoOriginal === '0' && s === 'IDA') return true;
+        if(sentidoOriginal === '1' && s === 'VOLTA') return true;
+        return false;
+      });
+      if(matchApi){
+        // se achou correspondência direta, usar só Ida/Volta
+        sentidoTxt = matchApi.sentido_linha;
+      } else {
+        // se não há correspondência direta, verificar se existe CIRCULAR
+        const circ = candidatos.find(c => String(c.sentido_linha||'').toUpperCase() === 'CIRCULAR');
+        if(circ){
+          // exibir 'CIRCULAR - (Ida)' ou 'CIRCULAR - (Volta)' quando API informar sentido
+          if(sentidoOriginal === '0') sentidoTxt = 'CIRCULAR - (Ida)';
+          else if(sentidoOriginal === '1') sentidoTxt = 'CIRCULAR - (Volta)';
+          else sentidoTxt = 'CIRCULAR';
+        } else if(candidatos[0].sentido_linha){
+          // fallback para o primeiro registro
+          sentidoTxt = candidatos[0].sentido_linha;
+        }
+      }
+    }
+  }
 
   return `
-    <b>Linha:</b> ${cd_linha || 'Sem Operação ou <br>Transferência'}<br>
-    <hr><br>
-    <b>Sentido:</b> ${sentidoTxt}<br>
+    <div style="text-align:center;">
+      <b style="padding-bottom: 6px; display: inline-block;text-align:center;">Linha:</b> ${cd_linha || 'Sem Operação ou <br>Transferência'}<br>
+    </div> 
+    <hr >
+    <b style="padding-top: 6px; display: inline-block;">Sentido:</b> ${sentidoTxt}<br>
     <b>Prefixo:</b> ${prefixo}<br>
     <b>Empresa:</b> ${empresa}<br>
     <b>Data:</b> ${data}<br>
@@ -286,6 +455,26 @@ function getCellKey(latlng){
   return `${cellX}_${cellY}`;
 }
 
+function mapSentidoTxt(s){
+  if(s === '0') return 'Ida';
+  if(s === '1') return 'Volta';
+  return '—';
+}
+
+function attachHoverTooltip(marker, cd_linha_display, sentidoApi){
+  try{
+    const sentidoTxt = mapSentidoTxt(String(sentidoApi || ''));
+    const label = (cd_linha_display === undefined || cd_linha_display === null) ? '—' : String(cd_linha_display);
+    const text = `${label} | ${sentidoTxt}`;
+    try { marker.unbindTooltip(); } catch(e){}
+    marker.bindTooltip(text, { direction: 'right', offset: [10,0], className: 'hover-tooltip', sticky: true });
+    // ensure hover opens/closes tooltip
+    marker.off('mouseover.tooltip'); marker.off('mouseout.tooltip');
+    marker.on('mouseover.tooltip', ()=>{ try{ marker.openTooltip(); }catch(e){} });
+    marker.on('mouseout.tooltip', ()=>{ try{ marker.closeTooltip(); }catch(e){} });
+  }catch(e){ /* ignore */ }
+}
+
 /* === atualização de marcadores: evitar destruir tudo === */
 async function atualizarMapa(){
   try{
@@ -305,6 +494,8 @@ async function atualizarMapa(){
       const linha = String(p.cd_linha || '');
       const empresa = empresaPorPrefixo(prefixo);
       if(!activeEmpresas.includes(empresa)) return false;
+      // respeitar seleção por linha: se selectedLinha definida, aceitar só essa linha
+      if(selectedLinha && String(linha) !== String(selectedLinha)) return false;
       if(searchTerms.length === 0) return true;
       return searchTerms.some(term => (linha && linha.includes(term)) || (prefixo && prefixo.includes(term)));
     });
@@ -321,6 +512,8 @@ async function atualizarMapa(){
         const empresa = empresaPorPrefixo(prefixo);
         const lat = parseFloat(p.latitude);
         const lon = parseFloat(p.longitude);
+        // guardar sentido original da API (p.sentido pode ser '0','1' ou '')
+        const sentidoApi = (p.sentido !== undefined && p.sentido !== null) ? String(p.sentido) : '';
         if(!lat || !lon || lat===0 || lon===0) continue;
 
         // armazenar tempo em ms (consistente)
@@ -333,6 +526,15 @@ async function atualizarMapa(){
         // se o marker já existe, apenas atualize posição e html
         if(fullMarkers[id]){
           fullMarkers[id].setLatLng([lat, lon]);
+          // anexa metadados caso não existam
+          fullMarkers[id]._cd_linha = cd_linha;
+          fullMarkers[id]._empresa = empresa;
+          fullMarkers[id]._prefixo = prefixo;
+          fullMarkers[id]._sentido = sentidoApi;
+
+          // atualizar tooltip de hover
+          try{ attachHoverTooltip(fullMarkers[id], cd_linha, sentidoApi); }catch(e){}
+
           // atualiza HTML do divIcon se necessário
           const el = fullMarkers[id].getElement();
           if(el && el.innerHTML !== html){
@@ -355,9 +557,19 @@ async function atualizarMapa(){
           // criar novo marker
           const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-10] });
           const m = L.marker([lat, lon], { icon }).addTo(map);
+          // anexa metadados para filtro
+          m._cd_linha = cd_linha;
+          m._empresa = empresa;
+          m._prefixo = prefixo;
+          m._sentido = sentidoApi;
+
+          // attach hover tooltip
+          try{ attachHoverTooltip(m, cd_linha, sentidoApi); }catch(e){}
+
           m.on('click', function(evt){
             bindAndOpenMarker(m, id, prefixo, cd_linha, empresa);
-            desenharTracado(cd_linha, empresa);
+            // selecionar apenas linhas com mesmo número e desenhar tracado
+            selecionarLinha(cd_linha, empresa, sentidoApi);
           });
           fullMarkers[id] = m;
 
@@ -402,6 +614,7 @@ async function atualizarMapa(){
         const empresa = empresaPorPrefixo(prefixo);
         const lat = parseFloat(p.latitude);
         const lon = parseFloat(p.longitude);
+        const sentidoApi = (p.sentido !== undefined && p.sentido !== null) ? String(p.sentido) : '';
         if(!lat || !lon || lat===0 || lon===0) continue;
 
         lastUpdateTimes[id] = p.datalocal ? new Date(p.datalocal).getTime() : (lastUpdateTimes[id] || Date.now());
@@ -411,7 +624,7 @@ async function atualizarMapa(){
         idCellMap[id] = cellKey;
 
         if(!cellMap[cellKey]){
-          cellMap[cellKey] = { id, latlng, cd_linha, empresa, color: coresEmpresas[empresa] || '#0077b6', prefixo };
+          cellMap[cellKey] = { id, latlng, cd_linha, empresa, color: coresEmpresas[empresa] || '#0077b6', prefixo, sentido: sentidoApi };
         }
       }
 
@@ -428,6 +641,15 @@ async function atualizarMapa(){
 
         if(smallMarkers[cellKey]){
           smallMarkers[cellKey].setLatLng(rep.latlng);
+          // anexa metadados caso não existam
+          smallMarkers[cellKey]._cd_linha = rep.cd_linha;
+          smallMarkers[cellKey]._empresa = rep.empresa;
+          smallMarkers[cellKey]._prefixo = rep.prefixo;
+          smallMarkers[cellKey]._sentido = rep.sentido;
+
+          // atualizar tooltip de hover
+          try{ attachHoverTooltip(smallMarkers[cellKey], rep.cd_linha, rep.sentido); }catch(e){}
+
           const el = smallMarkers[cellKey].getElement();
           if(el && el.innerHTML !== html){
             const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-8] });
@@ -446,7 +668,20 @@ async function atualizarMapa(){
         } else {
           const icon = L.divIcon({ className:'', html, iconSize:[0,0], iconAnchor:[0,0], popupAnchor:[0,-8] });
           const m = L.marker(rep.latlng, { icon, interactive:true }).addTo(map);
-          m.on('click', ()=> {bindAndOpenMarker(m, rep.id, rep.prefixo, rep.cd_linha, rep.empresa);desenharTracado(cd_linha, empresa);});
+          // anexa metadados
+          m._cd_linha = rep.cd_linha;
+          m._empresa = rep.empresa;
+          m._prefixo = rep.prefixo;
+          m._sentido = rep.sentido;
+
+          // attach hover tooltip
+          try{ attachHoverTooltip(m, rep.cd_linha, rep.sentido); }catch(e){}
+
+          m.on('click', ()=> {
+            bindAndOpenMarker(m, rep.id, rep.prefixo, rep.cd_linha, rep.empresa);
+            // selecionar apenas linhas com mesmo número e desenhar tracado
+            selecionarLinha(rep.cd_linha, rep.empresa, rep.sentido);
+          });
           smallMarkers[cellKey] = m;
 
           if(popupInfo.id === rep.id){
